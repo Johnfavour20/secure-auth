@@ -28,8 +28,8 @@ app.secret_key = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-product
 DEFAULT_ADMIN_EMAIL = os.getenv('DEFAULT_ADMIN_EMAIL', 'admin@secureauth.io')
 DEFAULT_ADMIN_PASSWORD = os.getenv('DEFAULT_ADMIN_PASSWORD', 'Admin@123')
 
-# Configure CORS to allow requests from React frontend (http://localhost:3000)
-CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
+# Configure CORS to allow requests from React frontend (http://localhost:3000, http://localhost:8080)
+CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://localhost:8080"])
 
 # Configure Flask-Mail
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
