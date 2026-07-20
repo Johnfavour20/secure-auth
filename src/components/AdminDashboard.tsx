@@ -9,14 +9,19 @@ import {
 } from 'lucide-react';
 import { User, LogEntry } from '../types';
 
+const API_BASE_URL = 'http://localhost:5000/api';
+
 interface AdminDashboardProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
+  setSessionToken?: (token: string | null) => void;
   users: User[];
   setUsers: React.Dispatch<React.SetStateAction<User[]>>;
   logs: LogEntry[];
   setLogs: React.Dispatch<React.SetStateAction<LogEntry[]>>;
+  refreshUsers: () => Promise<void>;
+  refreshLogs: () => Promise<void>;
   addLog: (category: 'auth' | 'system' | 'crypto' | 'threat', message: string, severity: 'info' | 'warning' | 'critical') => void;
 }
 
@@ -42,10 +47,13 @@ export default function AdminDashboard({
   onNavigate,
   currentUser,
   setCurrentUser,
+  setSessionToken,
   users,
   setUsers,
   logs,
   setLogs,
+  refreshUsers,
+  refreshLogs,
   addLog
 }: AdminDashboardProps) {
   // Navigation tabs state
@@ -68,6 +76,8 @@ export default function AdminDashboard({
   const [newPassword, setNewPassword] = useState('');
   const [newMfaEnabled, setNewMfaEnabled] = useState(false);
   const [newUserError, setNewUserError] = useState('');
+  const [adminRequestError, setAdminRequestError] = useState('');
+  const [isAdminLoading, setIsAdminLoading] = useState(false);
 
   // User Management tab states
   const [userSearchText, setUserSearchText] = useState('');
@@ -103,6 +113,26 @@ export default function AdminDashboard({
   // Simulated metrics that dynamically evolve
   const [activeSessionsCount, setActiveSessionsCount] = useState(156);
   const [failedAttemptsCount, setFailedAttemptsCount] = useState(12);
+
+  useEffect(() => {
+    const failedCount = logs.filter((log) => log.severity === 'critical' || log.severity === 'warning').length;
+    setFailedAttemptsCount(failedCount);
+  }, [logs]);
+
+  const runAdminRequest = async (requestFn: () => Promise<void>) => {
+    setAdminRequestError('');
+    setIsAdminLoading(true);
+    try {
+      await requestFn();
+      await refreshUsers();
+      await refreshLogs();
+    } catch (error) {
+      console.error(error);
+      setAdminRequestError(error instanceof Error ? error.message : 'Admin request failed.');
+    } finally {
+      setIsAdminLoading(false);
+    }
+  };
 
   // Auto-simulate activities periodically to make dashboard alive
   useEffect(() => {
@@ -303,7 +333,7 @@ export default function AdminDashboard({
   };
 
   // Add new user handler
-  const handleCreateUserSubmit = (e: React.FormEvent) => {
+  const handleCreateUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setNewUserError('');
 
@@ -317,80 +347,124 @@ export default function AdminDashboard({
       return;
     }
 
-    const newUser: User = {
-      email: newEmail,
-      fullName: newFullName || newEmail.split('@')[0].split('.').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
-      role: newRole,
-      status: newStatus,
-      mfaSecret: 'SECURE_SECRET_' + Math.random().toString(36).substr(2, 6).toUpperCase(),
-      mfaEnabled: newMfaEnabled,
-      registeredAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
-    };
+    if (newPassword.trim().length < 8) {
+      setNewUserError('Please provide a password with at least 8 characters.');
+      return;
+    }
 
-    const updated = [...users, newUser];
-    setUsers(updated);
-    localStorage.setItem('secureauth_users', JSON.stringify(updated));
+    await runAdminRequest(async () => {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: newEmail,
+          fullName: newFullName || newEmail.split('@')[0].split('.').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+          role: newRole,
+          accountStatus: newStatus,
+          password: newPassword,
+          mfaEnabled: newMfaEnabled,
+        }),
+      });
 
-    addLog('system', `Administrator Alex Johnson created user profile: ${newEmail} (MFA: ${newMfaEnabled ? 'Enabled' : 'Disabled'}, Role: ${newRole}, Status: ${newStatus})`, 'info');
-    
-    // reset form
-    setNewEmail('');
-    setNewFullName('');
-    setNewRole('User');
-    setNewStatus('Active');
-    setNewPassword('');
-    setNewMfaEnabled(false);
-    setShowCreateModal(false);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'Unable to create user.');
+      }
+
+      setUsers((prev) => [data.user, ...prev.filter((user) => user.email !== data.user.email)]);
+      addLog('system', `Administrator created user profile: ${newEmail} (MFA: ${newMfaEnabled ? 'Enabled' : 'Disabled'}, Role: ${newRole}, Status: ${newStatus})`, 'info');
+
+      setNewEmail('');
+      setNewFullName('');
+      setNewRole('User');
+      setNewStatus('Active');
+      setNewPassword('');
+      setNewMfaEnabled(false);
+      setShowCreateModal(false);
+    });
   };
 
   // Toggle user MFA status directly in the administration console
-  const toggleUserMfa = (email: string) => {
-    const updated = users.map(u => {
-      if (u.email === email) {
-        const nextState = !u.mfaEnabled;
-        addLog('auth', `MFA policy modified by Admin for user ${email}: ${nextState ? 'ENFORCED' : 'BYPASSED'}`, 'warning');
-        return { ...u, mfaEnabled: nextState };
+  const toggleUserMfa = async (user: User) => {
+    const nextState = !user.mfaEnabled;
+    await runAdminRequest(async () => {
+      const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ mfaEnabled: nextState }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'Unable to update MFA policy.');
       }
-      return u;
+
+      setUsers((prev) => prev.map((entry) => (entry.userId === user.userId ? data.user : entry)));
+      addLog('auth', `MFA policy modified for user ${user.email}: ${nextState ? 'ENFORCED' : 'BYPASSED'}`, 'warning');
     });
-    setUsers(updated);
-    localStorage.setItem('secureauth_users', JSON.stringify(updated));
   };
 
   // Toggle user account active status
-  const toggleUserStatus = (email: string) => {
-    const updated = users.map(u => {
-      if (u.email === email) {
-        const nextStatus = u.status === 'Inactive' ? 'Active' : 'Inactive';
-        addLog('system', `User account status modified by Administrator Alex Johnson: ${email} is now ${nextStatus.toUpperCase()}`, 'warning');
-        return { ...u, status: nextStatus };
+  const toggleUserStatus = async (user: User) => {
+    const currentStatus = user.status || user.accountStatus || 'Active';
+    const nextStatus = currentStatus === 'Inactive' ? 'Active' : 'Inactive';
+    await runAdminRequest(async () => {
+      const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ accountStatus: nextStatus }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'Unable to update account status.');
       }
-      return u;
+
+      setUsers((prev) => prev.map((entry) => (entry.userId === user.userId ? data.user : entry)));
+      addLog('system', `User account status modified: ${user.email} is now ${nextStatus.toUpperCase()}`, 'warning');
     });
-    setUsers(updated);
-    localStorage.setItem('secureauth_users', JSON.stringify(updated));
   };
 
   // Change user role
-  const changeUserRole = (email: string, role: 'Admin' | 'User') => {
-    const updated = users.map(u => {
-      if (u.email === email) {
-        addLog('system', `Access level changed by Administrator Alex Johnson for user ${email}: ${role.toUpperCase()}`, 'info');
-        return { ...u, role };
+  const changeUserRole = async (user: User, role: 'Admin' | 'User') => {
+    await runAdminRequest(async () => {
+      const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ role }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'Unable to update user role.');
       }
-      return u;
+
+      setUsers((prev) => prev.map((entry) => (entry.userId === user.userId ? data.user : entry)));
+      addLog('system', `Access level changed for user ${user.email}: ${role.toUpperCase()}`, 'info');
     });
-    setUsers(updated);
-    localStorage.setItem('secureauth_users', JSON.stringify(updated));
     setActiveUserActionMenuId(null);
   };
 
   // Delete user profile
-  const deleteUserProfile = (email: string) => {
-    const updated = users.filter(u => u.email !== email);
-    setUsers(updated);
-    localStorage.setItem('secureauth_users', JSON.stringify(updated));
-    addLog('system', `User account permanently terminated by admin directive: ${email}`, 'critical');
+  const deleteUserProfile = async (user: User) => {
+    await runAdminRequest(async () => {
+      const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? 'Unable to delete user.');
+      }
+
+      setUsers((prev) => prev.filter((entry) => entry.userId !== user.userId));
+      addLog('system', `User account permanently terminated by admin directive: ${user.email}`, 'critical');
+    });
   };
 
   // Submit mock support request
@@ -490,6 +564,7 @@ export default function AdminDashboard({
   const handleLogout = () => {
     addLog('auth', `Administrator Alex Johnson session closed. Admin console detached.`, 'info');
     setCurrentUser(null);
+    setSessionToken?.(null);
     onNavigate('landing');
   };
 
@@ -716,6 +791,11 @@ export default function AdminDashboard({
 
         {/* 4. CONTENT VIEW SWITCHER */}
         <div className="p-8 max-w-7xl mx-auto space-y-6">
+          {adminRequestError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
+              {adminRequestError}
+            </div>
+          )}
           
           <AnimatePresence mode="wait">
             {activeTab === 'overview' && (
@@ -1274,7 +1354,7 @@ export default function AdminDashboard({
                                   <div className="flex items-center justify-end gap-3">
                                     {/* Quick Toggle Status */}
                                     <button 
-                                      onClick={() => toggleUserStatus(u.email)}
+                                      onClick={() => void toggleUserStatus(u)}
                                       className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold tracking-wide uppercase transition-all cursor-pointer ${
                                         uStatus === 'Active' 
                                           ? 'border-rose-200 text-rose-600 hover:bg-rose-50' 
@@ -1307,7 +1387,7 @@ export default function AdminDashboard({
                                               Policy Controls
                                             </div>
                                             <button 
-                                              onClick={() => changeUserRole(u.email, uRole === 'Admin' ? 'User' : 'Admin')}
+                                              onClick={() => void changeUserRole(u, uRole === 'Admin' ? 'User' : 'Admin')}
                                               className="w-full text-left px-3.5 py-2 hover:bg-slate-50 text-slate-700 text-xs flex items-center gap-2 cursor-pointer font-semibold"
                                             >
                                               <Shield className="w-3.5 h-3.5 text-indigo-500" />
@@ -1315,7 +1395,7 @@ export default function AdminDashboard({
                                             </button>
                                             <button 
                                               onClick={() => {
-                                                toggleUserMfa(u.email);
+                                                void toggleUserMfa(u);
                                                 setActiveUserActionMenuId(null);
                                               }}
                                               className="w-full text-left px-3.5 py-2 hover:bg-slate-50 text-slate-700 text-xs flex items-center gap-2 cursor-pointer font-semibold"
@@ -1335,7 +1415,7 @@ export default function AdminDashboard({
                                             </button>
                                             <button 
                                               onClick={() => {
-                                                deleteUserProfile(u.email);
+                                                void deleteUserProfile(u);
                                                 setActiveUserActionMenuId(null);
                                               }}
                                               className="w-full text-left px-3.5 py-2 hover:bg-rose-50 text-[#ba1a1a] text-xs flex items-center gap-2 cursor-pointer font-bold border-t border-slate-100"
@@ -1435,8 +1515,18 @@ export default function AdminDashboard({
                     </button>
                     <button 
                       onClick={() => {
-                        setLogs([]);
-                        addLog('system', 'Security log history cleared by Alex Johnson.', 'warning');
+                        void runAdminRequest(async () => {
+                          const response = await fetch(`${API_BASE_URL}/admin/logs`, {
+                            method: 'DELETE',
+                            credentials: 'include',
+                          });
+                          const data = await response.json();
+                          if (!response.ok) {
+                            throw new Error(data.error ?? 'Unable to clear authentication logs.');
+                          }
+                          setLogs([]);
+                          addLog('system', 'Security log history cleared by administrator request.', 'warning');
+                        });
                       }}
                       className="border border-[#ba1a1a] text-[#ba1a1a] hover:bg-red-50 text-xs font-bold px-4 h-10 rounded-lg transition-all active:scale-95 cursor-pointer"
                     >

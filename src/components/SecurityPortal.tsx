@@ -9,6 +9,7 @@ interface SecurityPortalProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
+  setSessionToken?: (token: string | null) => void;
   logs: LogEntry[];
   setLogs: React.Dispatch<React.SetStateAction<LogEntry[]>>;
   addLog: (category: 'auth' | 'system' | 'crypto' | 'threat', message: string, severity: 'info' | 'warning' | 'critical') => void;
@@ -18,11 +19,12 @@ export default function SecurityPortal({
   onNavigate, 
   currentUser, 
   setCurrentUser,
+  setSessionToken,
   addLog
 }: SecurityPortalProps) {
   
   const userEmail = currentUser?.email || 'user@example.secure';
-  const displayName = userEmail === 'user@example.secure' ? 'Alex Johnson' : userEmail.split('@')[0];
+  const displayName = currentUser?.fullName || (userEmail === 'user@example.secure' ? 'Alex Johnson' : userEmail.split('@')[0]);
 
   // Dynamic session countdown state starting at 24 minutes and 56 seconds (1496 seconds)
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState(1496);
@@ -50,6 +52,7 @@ export default function SecurityPortal({
   const handleLogout = () => {
     addLog('auth', `User ${userEmail} signed out. Session closed securely.`, 'info');
     setCurrentUser(null);
+    setSessionToken?.(null);
     onNavigate('landing');
   };
 
@@ -126,7 +129,7 @@ export default function SecurityPortal({
                 <span>ACCOUNT STATUS</span>
               </div>
               <div className="text-2xl md:text-3xl font-bold text-[#00897b] flex items-center gap-1.5 mt-6">
-                • Active
+                • {currentUser?.accountStatus || currentUser?.status || 'Active'}
               </div>
             </div>
           </div>
@@ -174,4 +177,3 @@ export default function SecurityPortal({
     </div>
   );
 }
-

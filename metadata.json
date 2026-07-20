@@ -1,6 +1,4 @@
 {
   "name": "SecureAuth",
-  "description": "An enterprise-grade security and authentication portal featuring simulated Multi-Factor Authentication (MFA), password strength metrics, live session tracking, and a real-time audit log console.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "description": "An enterprise-grade security and authentication portal featuring simulated Multi-Factor Authentication (MFA), password strength metrics, live session tracking, and a real-time audit log console."
 }

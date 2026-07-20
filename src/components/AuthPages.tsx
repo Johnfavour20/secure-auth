@@ -1,149 +1,109 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  ShieldCheck, Mail, Lock, ShieldAlert, KeyRound, ArrowLeft, RefreshCw, 
-  CheckCircle2, Eye, EyeOff, Cpu, ArrowRight, UserCheck, UserPlus, Smartphone,
-  Shield, Clock, AlertCircle
+import {
+  ShieldCheck,
+  ShieldAlert,
+  RefreshCw,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  ArrowRight,
+  UserCheck,
+  ArrowLeft,
+  Shield,
+  Clock,
+  Mail,
+  Lock,
 } from 'lucide-react';
 import { User } from '../types';
+import { forgotPassword } from '../api/auth';
+
+const API_BASE_URL = 'http://localhost:5000/api';
 
 interface AuthPagesProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;
+  authMode: 'login' | 'register';
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
+  setSessionToken: (token: string | null) => void;
   users: User[];
   setUsers: React.Dispatch<React.SetStateAction<User[]>>;
   addLog: (category: 'auth' | 'system' | 'crypto' | 'threat', message: string, severity: 'info' | 'warning' | 'critical') => void;
 }
 
-// Simple base32 simulator for high-fidelity secret generation
-function generateMfaSecret(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let result = '';
-  for (let i = 0; i < 16; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-
-// Calculate simulated password entropy
 function checkPasswordStrength(password: string) {
   let score = 0;
   const checks = [
-    { label: 'Minimum 8 characters', passed: password.length >= 8 },
-    { label: 'Includes uppercase letter', passed: /[A-Z]/.test(password) },
-    { label: 'Includes lowercase letter', passed: /[a-z]/.test(password) },
-    { label: 'Includes number or special symbol', passed: /[\d\W]/.test(password) },
+    password.length >= 8,
+    /[A-Z]/.test(password),
+    /[a-z]/.test(password),
+    /[\d\W]/.test(password),
   ];
 
-  checks.forEach(check => {
-    if (check.passed) score++;
+  checks.forEach((passed) => {
+    if (passed) score++;
   });
 
-  let poolSize = 0;
-  if (/[a-z]/.test(password)) poolSize += 26;
-  if (/[A-Z]/.test(password)) poolSize += 26;
-  if (/\d/.test(password)) poolSize += 10;
-  if (/\W/.test(password)) poolSize += 32;
+  const entropy = Math.round(password.length * 6.5);
 
-  const entropy = password.length > 0 && poolSize > 0 
-    ? Math.round(password.length * Math.log2(poolSize)) 
-    : 0;
-
-  let label = 'Insecure';
-  let color = 'bg-red-500';
-
-  if (entropy >= 80 && score === 4) {
-    label = 'Enterprise (Military-Grade)';
-    color = 'bg-primary';
-  } else if (score === 4) {
-    label = 'Strong';
-    color = 'bg-emerald-500';
-  } else if (score >= 2) {
-    label = 'Moderate';
-    color = 'bg-amber-500';
-  } else if (password.length > 0) {
-    label = 'Weak';
-    color = 'bg-red-500';
+  if (score === 4) {
+    return { label: 'Strong', color: 'bg-emerald-500', entropy };
   }
-
-  return { score, entropy, label, color, checks };
+  if (score >= 2) {
+    return { label: 'Moderate', color: 'bg-amber-500', entropy };
+  }
+  return { label: 'Weak', color: 'bg-red-500', entropy };
 }
 
-// TOTP mock simulator that is synchronized with seconds
-export function useMockTotp(secret: string) {
-  const [code, setCode] = useState('');
-  const [timeLeft, setTimeLeft] = useState(30);
-
-  useEffect(() => {
-    const calculateCode = () => {
-      if (!secret) return;
-      const epoch = Math.floor(Date.now() / 30000);
-      let hash = 0;
-      for (let i = 0; i < secret.length; i++) {
-        hash = secret.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      const mixed = Math.abs(hash ^ epoch);
-      const otp = (mixed % 900000) + 100000; // Force 6 digits
-      setCode(otp.toString());
-    };
-
-    calculateCode();
-    
-    const interval = setInterval(() => {
-      const seconds = new Date().getSeconds();
-      const remaining = 30 - (seconds % 30);
-      setTimeLeft(remaining);
-      if (remaining === 30) {
-        calculateCode();
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [secret]);
-
-  return { code, timeLeft };
-}
-
-export default function AuthPages({ 
-  onNavigate, 
-  currentUser, 
-  setCurrentUser, 
-  users, 
+export default function AuthPages({
+  onNavigate,
+  authMode,
+  setCurrentUser,
+  setSessionToken,
+  users,
   setUsers,
-  addLog
+  addLog,
 }: AuthPagesProps) {
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot-password' | 'reset-password'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot-password'>('login');
+  const [step, setStep] = useState<1 | 2>(1);
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [step, setStep] = useState<1 | 2>(1); // Step 2 is MFA confirmation
-  const [mfaSecret, setMfaSecret] = useState('');
   const [otpInput, setOtpInput] = useState('');
+  const [pendingUserId, setPendingUserId] = useState<number | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
-  const [countdown, setCountdown] = useState(300); // 5 minutes (300 seconds)
+  const [countdown, setCountdown] = useState(300);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Auto handle step changes to reset OTP input state
   useEffect(() => {
-    if (step === 2) {
-      setCountdown(300);
-      setOtpDigits(['', '', '', '', '', '']);
-      setOtpInput('');
-    }
-  }, [step]);
+    setMode(authMode);
+    setStep(1);
+    setError('');
+    setSuccess('');
+  }, [authMode]);
 
-  // Countdown clock ticking down every second
   useEffect(() => {
-    if (step !== 2 || countdown <= 0) return;
-    const interval = setInterval(() => {
-      setCountdown(prev => prev - 1);
+    if (step !== 2) return;
+
+    setCountdown(300);
+    const interval = window.setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
-    return () => clearInterval(interval);
-  }, [step, countdown]);
+
+    return () => window.clearInterval(interval);
+  }, [step, pendingUserId]);
+
+  const strength = useMemo(() => checkPasswordStrength(password), [password]);
 
   const formatCountdown = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -151,376 +111,286 @@ export default function AuthPages({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleDigitChange = (index: number, value: string) => {
-    // Only allow alphanumeric to support letters and numbers, but cleaned to match token patterns
-    const cleanedValue = value.replace(/[^0-9A-Za-z]/g, '');
-    const newDigits = [...otpDigits];
-    
-    // Take the last character entered
-    newDigits[index] = cleanedValue.slice(-1);
-    setOtpDigits(newDigits);
-    
-    const fullCode = newDigits.join('');
-    setOtpInput(fullCode);
-
-    // If typing and not the last box, move focus forward
-    if (cleanedValue && index < 5) {
-      const nextInput = document.getElementById(`otp-input-${index + 1}`);
-      nextInput?.focus();
-    }
-  };
-
-  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace') {
-      if (!otpDigits[index] && index > 0) {
-        const newDigits = [...otpDigits];
-        newDigits[index - 1] = '';
-        setOtpDigits(newDigits);
-        setOtpInput(newDigits.join(''));
-        
-        const prevInput = document.getElementById(`otp-input-${index - 1}`);
-        prevInput?.focus();
-      } else {
-        const newDigits = [...otpDigits];
-        newDigits[index] = '';
-        setOtpDigits(newDigits);
-        setOtpInput(newDigits.join(''));
-      }
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData.getData('text').trim().replace(/[^0-9A-Za-z]/g, '').slice(0, 6);
-    if (pastedData) {
-      const newDigits = [...otpDigits];
-      for (let i = 0; i < 6; i++) {
-        newDigits[i] = pastedData[i] || '';
-      }
-      setOtpDigits(newDigits);
-      setOtpInput(pastedData);
-      
-      const focusIdx = Math.min(pastedData.length, 5);
-      const targetInput = document.getElementById(`otp-input-${focusIdx}`);
-      targetInput?.focus();
-    }
-  };
-
-  const handleResendOtp = () => {
+  const resetMessages = () => {
     setError('');
-    setSuccess('A new 6-digit verification code has been dispatched successfully.');
-    setCountdown(300);
-    setOtpDigits(['', '', '', '', '', '']);
-    setOtpInput('');
-    addLog('system', `Verification token reset and resent for ${email}`, 'info');
+    setSuccess('');
   };
 
-  // Pre-populate some demo credentials if the user base is empty for instant interactive validation
-  useEffect(() => {
-    if (users.length === 0) {
-      const demoUser: User = {
-        email: 'user@example.secure',
-        mfaSecret: 'SECUREAUTHDEMOSECRET',
+  const upsertUser = (user: User) => {
+    setUsers((prev) => {
+      const normalized = {
+        ...user,
+        status: user.accountStatus,
         mfaEnabled: true,
-        registeredAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-        fullName: 'Demo Operator',
-        role: 'User',
-        status: 'Active'
       };
-      // For simulator reference
-      (demoUser as any).password = 'AdminPass123!';
-      const updated = [demoUser];
-      setUsers(updated);
-      localStorage.setItem('secureauth_users', JSON.stringify(updated));
-    }
-  }, [users, setUsers]);
+      const filtered = prev.filter((existingUser) => existingUser.email !== normalized.email);
+      return [normalized, ...filtered];
+    });
+  };
 
-  // Set email value to demo user when in login mode if desired, or let it stay clean
-  useEffect(() => {
-    if (mode === 'login' && email === '') {
-      setEmail('user@example.secure');
-      setPassword('AdminPass123!');
-    } else if (mode === 'register') {
-      setEmail('');
-      setPassword('');
-      setMfaSecret(generateMfaSecret());
-    } else if (mode === 'forgot-password') {
-      setError('');
-      setSuccess('');
-    } else if (mode === 'reset-password') {
-      setPassword('');
-      setConfirmPassword('');
-      setShowPassword(false);
-      setShowConfirmPassword(false);
-      setError('');
-      setSuccess('');
-    }
-    setStep(1);
-  }, [mode]);
-
-  const strength = checkPasswordStrength(password);
-  const { code: currentOtpCode, timeLeft } = useMockTotp(mfaSecret || 'SECUREAUTHSECRET');
-
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    resetMessages();
 
-    if (!email || !email.includes('@')) {
-      setError('Please enter a valid business email address.');
+    if (!fullName.trim()) {
+      setError('Please enter your full name.');
+      return;
+    }
+
+    if (!email.includes('@')) {
+      setError('Please enter a valid email address.');
       return;
     }
 
     if (password.length < 8) {
-      setError('Password must meet minimum 8-character requirements.');
-      return;
-    }
-
-    if (users.some(u => u.email.toLowerCase() === email.toLowerCase())) {
-      setError('An account with this email is already registered under SecureAuth.');
-      return;
-    }
-
-    setStep(2);
-    addLog('auth', `MFA setup wizard initialized for user ${email}`, 'info');
-  };
-
-  const handleVerifyAndCompleteRegister = () => {
-    setError('');
-    
-    if (otpInput !== currentOtpCode) {
-      setError('Invalid authenticator token. Please verify the active simulator code.');
-      addLog('threat', `Failed MFA setup attempt for ${email}. Invalid code: ${otpInput}`, 'warning');
-      return;
-    }
-
-    const newUser: User = {
-      email: email.toLowerCase(),
-      mfaSecret,
-      mfaEnabled: true,
-      registeredAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-      fullName: email.split('@')[0].split('.').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' '),
-      role: 'User',
-      status: 'Active'
-    };
-    (newUser as any).password = password;
-
-    const updatedUsers = [...users, newUser];
-    setUsers(updatedUsers);
-    localStorage.setItem('secureauth_users', JSON.stringify(updatedUsers));
-
-    setSuccess('SecureAuth profile provisioned successfully! Proceeding to operations portal...');
-    addLog('auth', `User account ${email} created with Active MFA.`, 'info');
-    
-    setTimeout(() => {
-      setCurrentUser(newUser);
-      onNavigate(newUser.role === 'Admin' ? 'admin' : 'dashboard');
-    }, 1500);
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    const foundUser = users.find(u => u.email.toLowerCase() === email.toLowerCase() && (u as any).password === password);
-    if (!foundUser) {
-      setError('Invalid credentials. Please try again.');
-      addLog('threat', `Failed authentication attempt for email: ${email}`, 'warning');
-      return;
-    }
-
-    setMfaSecret(foundUser.mfaSecret);
-    setStep(2);
-    addLog('auth', `Password verified for ${email}. Prompting for OTP code.`, 'info');
-  };
-
-  const handleVerifyLogin = () => {
-    setError('');
-
-    if (otpInput !== currentOtpCode) {
-      setError('MFA Authentication Failed. Correct token required.');
-      addLog('threat', `Failed OTP validation for ${email}`, 'critical');
-      return;
-    }
-
-    const foundUser = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (foundUser) {
-      setCurrentUser(foundUser);
-      setSuccess('MFA verification successful. Access granted.');
-      addLog('auth', `MFA verified for ${email}. Initializing secure session.`, 'info');
-      
-      setTimeout(() => {
-        const userRole = foundUser.role || 'User';
-        onNavigate(userRole === 'Admin' ? 'admin' : 'dashboard');
-      }, 1000);
-    }
-  };
-
-  const handleForgotPasswordSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (!email || !email.includes('@')) {
-      setError('Please enter a valid business email address.');
-      addLog('threat', `Attempted invalid email format password reset for: ${email || 'blank'}`, 'warning');
-      return;
-    }
-
-    const foundUserIndex = users.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
-    
-    let updatedUsers = [...users];
-    if (foundUserIndex !== -1) {
-      const updatedUser = { ...updatedUsers[foundUserIndex] };
-      if (password) {
-        (updatedUser as any).password = password;
-        updatedUsers[foundUserIndex] = updatedUser;
-        setUsers(updatedUsers);
-        localStorage.setItem('secureauth_users', JSON.stringify(updatedUsers));
-        addLog('auth', `Password credentials successfully updated & re-encrypted with AES-256 for: ${email}`, 'info');
-      }
-    } else {
-      setError('Email address is not registered under any operational profile.');
-      return;
-    }
-
-    addLog('auth', `Password reset token requested and dispatched for: ${email}`, 'warning');
-    setSuccess(`Password updated successfully! A security recovery confirmation has been dispatched to ${email}. Redirecting...`);
-
-    setTimeout(() => {
-      setSuccess('');
-      setMode('login');
-    }, 2500);
-  };
-
-  const handleResetPasswordSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (password.length < 8) {
-      setError('Password must meet minimum 8-character requirements.');
+      setError('Password must be at least 8 characters long.');
       return;
     }
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match. Review entered credentials.');
+      setError('Passwords do not match.');
       return;
     }
 
-    // Direct the user to the reset password page where they enter email to complete
-    addLog('auth', `New password requirements satisfied. Directing user to email association reset page.`, 'info');
-    setMode('forgot-password');
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim(),
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error ?? 'Registration failed.');
+        return;
+      }
+
+      addLog('auth', `Account registered for ${email.trim().toLowerCase()}.`, 'info');
+      setPendingUserId(data.userId ?? null);
+      setStep(2);
+      setOtpInput('');
+      setPassword('');
+      setConfirmPassword('');
+      setSuccess(data.message ?? 'Registration successful. Check your email for the verification code to continue.');
+    } catch (requestError) {
+      console.error(requestError);
+      setError('Unable to reach the Flask API. Make sure the backend is running on port 5000.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    resetMessages();
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error ?? 'Login failed.');
+        addLog('threat', `Failed login attempt for ${email.trim().toLowerCase()}.`, 'warning');
+        return;
+      }
+
+      const authenticatedUser: User = {
+        ...data.user,
+        status: data.user.accountStatus,
+        mfaEnabled: true,
+      };
+
+      setCurrentUser(authenticatedUser);
+      setSessionToken(data.sessionToken ?? null);
+      upsertUser(authenticatedUser);
+      addLog('auth', `Secure session established for ${authenticatedUser.email}.`, 'info');
+      setSuccess('Login successful. Redirecting...');
+
+      window.setTimeout(() => {
+        onNavigate(authenticatedUser.role === 'Admin' ? 'admin' : 'dashboard');
+      }, 700);
+    } catch (requestError) {
+      console.error(requestError);
+      setError('Unable to reach the Flask API. Make sure the backend is running on port 5000.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleOtpKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && otpInput.length === 6 && !isSubmitting && pendingUserId) {
+      event.preventDefault();
+      void handleVerifyLogin();
+    }
+  };
+
+  const handleVerifyLogin = async () => {
+    if (!pendingUserId) {
+      setError('Missing pending login session. Please sign in again.');
+      return;
+    }
+
+    resetMessages();
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          userId: pendingUserId,
+          otp: otpInput.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error ?? 'OTP verification failed.');
+        addLog('threat', `Failed OTP verification for ${email.trim().toLowerCase()}.`, 'critical');
+        return;
+      }
+
+      const authenticatedUser: User = {
+        ...data.user,
+        status: data.user.accountStatus,
+        mfaEnabled: true,
+      };
+
+      setCurrentUser(authenticatedUser);
+      setSessionToken(data.sessionToken ?? null);
+      upsertUser(authenticatedUser);
+      addLog('auth', `Secure session established for ${authenticatedUser.email}.`, 'info');
+      setSuccess('Verification successful. Redirecting...');
+
+      window.setTimeout(() => {
+        onNavigate(authenticatedUser.role === 'Admin' ? 'admin' : 'dashboard');
+      }, 700);
+    } catch (requestError) {
+      console.error(requestError);
+      setError('Unable to reach the Flask API. Make sure the backend is running on port 5000.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (!pendingUserId) return;
+
+    resetMessages();
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/resend-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ userId: pendingUserId }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error ?? 'Unable to resend OTP.');
+        return;
+      }
+
+      setCountdown(300);
+      if (data.debugOtp) {
+        setOtpInput(String(data.debugOtp));
+        setSuccess(`${data.message ?? 'Use this OTP code to continue:'} ${data.debugOtp}`);
+      } else {
+        setOtpInput('');
+        setSuccess('A new OTP has been sent to your email.');
+      }
+      addLog('system', `OTP resent for ${email.trim().toLowerCase()}.`, 'info');
+    } catch (requestError) {
+      console.error(requestError);
+      setError('Unable to reach the Flask API. Make sure the backend is running on port 5000.');
+    }
+  };
+
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    resetMessages();
+
+    if (!email.includes('@')) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+
+    try {
+      const response = await forgotPassword(email.trim().toLowerCase());
+      setSuccess(response.data.message ?? 'If that email exists, a reset link has been sent.');
+      addLog('system', `Password reset requested for ${email.trim().toLowerCase()}.`, 'info');
+    } catch (resetError) {
+      console.error(resetError);
+      setError('Unable to request password reset. Please try again later.');
+    }
+  };
+
+  const heading =
+    step === 2 ? 'Verify Your Identity' : mode === 'register' ? 'Create Account' : mode === 'forgot-password' ? 'Reset Password' : 'Welcome Back';
+
+  const subheading =
+    step === 2
+      ? 'Enter the 6-digit code sent to your email address'
+      : mode === 'register'
+        ? 'Register a new profile backed by the Flask API'
+        : mode === 'forgot-password'
+          ? 'Enter your email to receive a password reset link.'
+          : 'Sign in with your email and password';
+
   return (
-    <div className="min-h-screen flex flex-col font-body bg-surface-light antialiased text-primary select-none">
-      
-      {/* Top Navigation */}
+    <div className="min-h-screen flex flex-col font-body bg-surface-light antialiased text-primary">
       <header className="w-full top-0 sticky z-50 bg-white border-b border-gray-200">
         <div className="flex justify-between items-center h-20 px-6 md:px-16 max-w-7xl mx-auto">
-          <div 
+          <div
             onClick={() => onNavigate('landing')}
             className="flex items-center gap-2 cursor-pointer hover:opacity-95 transition-opacity"
           >
             <ShieldCheck className="text-primary w-8 h-8" />
             <span className="font-headline text-2xl font-bold text-primary tracking-tight">SecureAuth</span>
           </div>
-          <div className="flex gap-6">
-            <button 
-              onClick={() => onNavigate('landing')}
-              className="text-slate-500 font-medium text-sm hover:text-primary transition-colors cursor-pointer"
-            >
-              Back to main page
-            </button>
-            <button 
-              onClick={() => {
-                addLog('system', 'Operator accessed system status node', 'info');
-                alert('System status node: ALL SYSTEMS OPERATIONAL (99.99% uptime)');
-              }}
-              className="text-slate-500 font-medium text-sm hover:text-primary transition-colors cursor-pointer hidden sm:block"
-            >
-              Status
-            </button>
-          </div>
+          <button
+            onClick={() => onNavigate('landing')}
+            className="text-slate-500 font-medium text-sm hover:text-primary transition-colors cursor-pointer"
+          >
+            Back to main page
+          </button>
         </div>
       </header>
 
-      {/* Main Area */}
       <main className="flex-grow flex items-center justify-center py-12 px-6 relative bg-surface-light overflow-hidden">
-        {/* Subtle background decoration */}
-        <div className="absolute inset-0 pointer-events-none opacity-5 overflow-hidden">
-          <div className="absolute -top-1/2 -left-1/4 w-full h-full bg-primary rounded-full blur-[160px]"></div>
-        </div>
-
-        {/* Dynamic transition Container */}
         <div className="w-full max-w-5xl flex flex-col lg:flex-row items-center justify-center gap-8 relative z-10">
-          
-          {/* Glass-container centered login card styled EXACTLY like the HTML code */}
-          <motion.section 
-            layout
-            className="w-full max-w-[420px] bg-white border border-gray-200 shadow-xl rounded-xl p-8 flex flex-col relative"
-          >
-            {step === 1 ? (
-              mode === 'reset-password' ? (
-                <div className="flex flex-col items-center mb-6 text-center">
-                  {/* Logo centered */}
-                  <div className="flex items-center gap-2 justify-center mb-4">
-                    <ShieldCheck className="text-primary w-6 h-6" />
-                    <span className="font-headline text-xl font-bold text-primary tracking-tight">SecureAuth</span>
-                  </div>
-                  <h1 className="font-headline text-2xl font-bold text-primary mb-1">
-                    Create a New Password
-                  </h1>
-                  <p className="text-xs text-slate-500 max-w-[280px]">
-                    Choose a strong password you haven't used before
-                  </p>
-                </div>
-              ) : mode === 'forgot-password' ? (
-                <div className="flex flex-col items-center mb-6 text-center">
-                  <div className="w-12 h-12 bg-blue-50 text-primary rounded-xl flex items-center justify-center mb-4 border border-blue-100">
-                    <RefreshCw className="w-6 h-6 animate-spin-slow text-primary" />
-                  </div>
-                  <h1 className="font-headline text-2xl font-bold text-primary mb-1">
-                    Reset Your Password
-                  </h1>
-                  <p className="text-xs text-slate-500 max-w-[280px]">
-                    Enter your registered email and we'll send you a reset link
-                  </p>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center mb-6 text-center">
-                  <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-4 border border-gray-100">
-                    <UserCheck className="w-6 h-6 text-primary" />
-                  </div>
-                  <h1 className="font-headline text-2xl font-bold text-primary mb-1">
-                    {mode === 'login' ? 'Welcome Back' : 'Deploy New Account'}
-                  </h1>
-                  <p className="text-xs text-slate-500">
-                    {mode === 'login' ? 'Log in to your secure console' : 'Register a new profile and pair MFA'}
-                  </p>
-                </div>
-              )
-            ) : (
-              <div className="flex flex-col items-center mb-6 text-center">
-                {/* Logo centered */}
-                <div className="flex items-center gap-2 justify-center mb-6">
-                  <ShieldCheck className="text-primary w-6 h-6" />
-                  <span className="font-headline text-xl font-bold text-primary tracking-tight">SecureAuth</span>
-                </div>
-                
-                {/* Verify Your Identity */}
-                <div className="flex items-center gap-2 text-primary justify-center">
-                  <Shield className="w-5 h-5 text-primary" />
-                  <h1 className="font-headline text-lg md:text-xl font-medium tracking-tight">Verify Your Identity</h1>
-                </div>
-                <p className="text-xs text-slate-500 mt-2 max-w-[285px] leading-relaxed">
-                  Enter the 6-digit code sent to your email
-                </p>
+          <motion.section className="w-full max-w-[440px] bg-white border border-gray-200 shadow-xl rounded-xl p-8 flex flex-col relative">
+            <div className="flex flex-col items-center mb-6 text-center">
+              <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-4 border border-gray-100">
+                {step === 2 ? <Shield className="w-6 h-6 text-primary" /> : <UserCheck className="w-6 h-6 text-primary" />}
               </div>
-            )}
+              <h1 className="font-headline text-2xl font-bold text-primary mb-1">{heading}</h1>
+              <p className="text-xs text-slate-500 max-w-[320px]">{subheading}</p>
+            </div>
 
-            {/* Error & Success status */}
-            {error && step === 1 && (
+            {error && (
               <div className="mb-4 bg-red-50 border border-red-200 text-red-600 text-xs px-3.5 py-2.5 rounded flex items-start gap-2">
                 <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
                 <span className="leading-normal">{error}</span>
@@ -536,340 +406,243 @@ export default function AuthPages({
 
             <AnimatePresence mode="wait">
               {step === 1 ? (
-                mode === 'reset-password' ? (
-                  <motion.form 
-                    key="reset-password"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    onSubmit={handleResetPasswordSubmit} 
-                    className="space-y-4"
-                  >
-                    {/* New Password */}
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-slate-500 block" htmlFor="new-password">
-                        New Password
-                      </label>
-                      <div className="relative">
-                        <input 
-                          className="w-full h-11 pl-4 pr-10 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white transition-all focus:border-primary focus:ring-2 focus:ring-primary/10"
-                          id="new-password" 
-                          placeholder="••••••••" 
-                          type={showPassword ? "text" : "password"}
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                        />
-                        <button 
-                          className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-primary transition-colors cursor-pointer" 
-                          onClick={() => setShowPassword(!showPassword)}
-                          type="button"
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
+                <motion.div
+                  key={`mode-${mode}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                >
+                  {mode === 'forgot-password' ? (
+                    <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500 block" htmlFor="forgot-email">
+                          Email Address
+                        </label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input
+                            id="forgot-email"
+                            type="email"
+                            required
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full h-11 pl-10 pr-4 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white focus:border-primary focus:ring-2 focus:ring-primary/10"
+                            placeholder="name@company.com"
+                          />
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Password Strength Indicator matching screenshot exactly */}
-                    <div className="space-y-1.5">
-                      <div className="flex gap-1.5 w-full">
-                        {[1, 2, 3, 4].map((barIdx) => {
-                          const isActive = password.length > 0 && barIdx <= Math.ceil((strength.entropy || 0) / 24);
-                          let barColor = 'bg-slate-100';
-                          if (isActive) {
-                            if (strength.label === 'WEAK') barColor = 'bg-red-500';
-                            else if (strength.label === 'MEDIUM') barColor = 'bg-amber-500';
-                            else if (strength.label === 'STRONG') barColor = 'bg-emerald-500';
-                            else if (strength.label === 'CRITICAL SECURE') barColor = 'bg-[#1b73e8]';
-                          }
-                          return (
-                            <div key={barIdx} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${barColor}`} />
-                          );
-                        })}
-                      </div>
-                      <p className="text-[10px] font-mono text-slate-500">
-                        Password Strength: {password ? strength.label : 'Enter characters...'}
-                      </p>
-                    </div>
-
-                    {/* Confirm Password */}
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-slate-500 block" htmlFor="confirm-password">
-                        Confirm New Password
-                      </label>
-                      <div className="relative">
-                        <input 
-                          className="w-full h-11 pl-4 pr-10 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white transition-all focus:border-primary focus:ring-2 focus:ring-primary/10"
-                          id="confirm-password" 
-                          placeholder="••••••••" 
-                          type={showConfirmPassword ? "text" : "password"}
-                          required
-                          value={confirmPassword}
-                          onChange={(e) => setConfirmPassword(e.target.value)}
-                        />
-                        <button 
-                          className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-primary transition-colors cursor-pointer" 
-                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                          type="button"
-                        >
-                          {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Submit Trigger */}
-                    <div className="pt-2">
-                      <button 
-                        className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg active:translate-y-px flex items-center justify-center gap-2 cursor-pointer" 
-                        type="submit"
-                      >
-                        Reset Password
-                      </button>
-                    </div>
-
-                    {/* AES-256 Separator Line & Badge */}
-                    <div className="pt-4 mt-4 border-t border-gray-100 flex items-center justify-center gap-1.5 text-slate-400 text-[10px] font-mono tracking-wider uppercase">
-                      <Shield className="w-3.5 h-3.5" />
-                      <span>Secure AES-256 Encryption</span>
-                    </div>
-
-                    {/* Back Link */}
-                    <div className="text-center pt-2">
                       <button
-                        type="button"
-                        onClick={() => setMode('login')}
-                        className="text-xs text-primary hover:underline font-bold flex items-center justify-center gap-1.5 mx-auto cursor-pointer"
-                      >
-                        <ArrowLeft className="w-3.5 h-3.5" />
-                        Back to Login
-                      </button>
-                    </div>
-                  </motion.form>
-                ) : mode === 'forgot-password' ? (
-                  <motion.form 
-                    key="forgot-password"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    onSubmit={handleForgotPasswordSubmit} 
-                    className="space-y-4"
-                  >
-                    {/* Email / Username */}
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-slate-500 block" htmlFor="forgot-identity">
-                        Email Address
-                      </label>
-                      <div className="relative">
-                        <input 
-                          className="w-full h-11 px-4 text-sm font-medium text-primary border border-gray-300 rounded-lg outline-none bg-white transition-all focus:border-primary focus:ring-2 focus:ring-primary/10"
-                          id="forgot-identity" 
-                          placeholder="name@company.com" 
-                          type="email" 
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Submit Trigger */}
-                    <div className="pt-2">
-                      <button 
-                        className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg active:translate-y-px flex items-center justify-center gap-2 cursor-pointer" 
+                        className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer"
                         type="submit"
                       >
                         Send Reset Link
                       </button>
-                    </div>
 
-                    {/* Back Link */}
-                    <div className="text-center pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setMode('login')}
-                        className="text-xs text-primary hover:underline font-bold flex items-center justify-center gap-1.5 mx-auto cursor-pointer"
-                      >
-                        <ArrowLeft className="w-3.5 h-3.5" />
-                        Back to Login
-                      </button>
-                    </div>
-                  </motion.form>
-                ) : (
-                  <motion.form 
-                    key="form1"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    onSubmit={mode === 'register' ? handleRegister : handleLogin} 
-                    className="space-y-4"
-                  >
-                    {/* Email / Username */}
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-slate-500 block" htmlFor="identity">
-                        Business Email Address
-                      </label>
-                      <div className="relative">
-                        <input 
-                          className={`w-full h-11 px-4 text-sm font-medium text-primary border rounded-lg outline-none bg-white transition-all focus:border-primary focus:ring-2 focus:ring-primary/10 ${
-                            error && !email ? 'border-red-500 ring-2 ring-red-500/10' : 'border-gray-300'
-                          }`}
-                          id="identity" 
-                          placeholder="operator@company.secure" 
-                          type="email" 
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Password Field */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between items-center">
-                        <label className="text-xs font-semibold text-slate-500 block" htmlFor="password">
-                          Access Password
-                        </label>
-                        {mode === 'login' && (
-                          <button 
-                            type="button"
-                            onClick={() => setMode('reset-password')}
-                            className="text-xs text-primary hover:underline font-bold cursor-pointer"
-                          >
-                            Forgot Password?
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <input 
-                          className="w-full h-11 pl-4 pr-10 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white transition-all focus:border-primary focus:ring-2 focus:ring-primary/10"
-                          id="password" 
-                          placeholder="••••••••" 
-                          type={showPassword ? "text" : "password"}
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                        />
-                        <button 
-                          className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-primary transition-colors cursor-pointer" 
-                          onClick={() => setShowPassword(!showPassword)}
+                      <div className="text-center pt-2">
+                        <button
                           type="button"
+                          onClick={() => {
+                            resetMessages();
+                            setMode('login');
+                            onNavigate('login');
+                          }}
+                          className="text-xs text-primary hover:underline font-bold flex items-center justify-center gap-1.5 mx-auto cursor-pointer"
                         >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          Back to Login
                         </button>
                       </div>
-                    </div>
-
-                    {/* Password Strength Meter */}
-                    {mode === 'register' && password.length > 0 && (
-                      <div className="bg-slate-50 border border-gray-100 rounded-lg p-3 space-y-2 mt-2">
-                        <div className="flex justify-between items-center text-[10px] font-semibold text-slate-500">
-                          <span>ENTROPY: {strength.entropy} BITS</span>
-                          <span className="font-bold text-primary">{strength.label}</span>
+                    </form>
+                  ) : (
+                    <form onSubmit={mode === 'register' ? handleRegister : handleLogin} className="space-y-4">
+                      {mode === 'register' && (
+                        <div className="space-y-1">
+                          <label className="text-xs font-semibold text-slate-500 block" htmlFor="full-name">
+                            Full Name
+                          </label>
+                          <input
+                            id="full-name"
+                            type="text"
+                            required
+                            value={fullName}
+                            onChange={(e) => setFullName(e.target.value)}
+                            className="w-full h-11 px-4 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white focus:border-primary focus:ring-2 focus:ring-primary/10"
+                            placeholder="Marcus Kane"
+                          />
                         </div>
-                        <div className="w-full h-1 bg-gray-200 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full transition-all duration-300 ${strength.color}`}
-                            style={{ width: `${Math.min(100, (strength.entropy / 96) * 100)}%` }}
-                          ></div>
+                      )}
+
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500 block" htmlFor="email">
+                          Email Address
+                        </label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input
+                            id="email"
+                            type="email"
+                            required
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full h-11 pl-10 pr-4 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white focus:border-primary focus:ring-2 focus:ring-primary/10"
+                            placeholder="operator@company.com"
+                          />
                         </div>
                       </div>
-                    )}
 
-                    {/* Submit Trigger */}
-                    <div className="pt-2">
-                      <button 
-                        className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg active:translate-y-px flex items-center justify-center gap-2 cursor-pointer" 
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center">
+                          <label className="text-xs font-semibold text-slate-500 block" htmlFor="password">
+                            Password
+                          </label>
+                          {mode === 'login' && (
+                            <button
+                              type="button"
+                              onClick={() => setMode('forgot-password')}
+                              className="text-xs text-primary hover:underline font-bold cursor-pointer"
+                            >
+                              Forgot Password?
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="relative">
+                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input
+                            id="password"
+                            type={showPassword ? 'text' : 'password'}
+                            required
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full h-11 pl-10 pr-10 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white focus:border-primary focus:ring-2 focus:ring-primary/10"
+                            placeholder="••••••••"
+                          />
+                          <button
+                            className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-primary transition-colors cursor-pointer"
+                            onClick={() => setShowPassword(!showPassword)}
+                            type="button"
+                          >
+                            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {mode === 'register' && (
+                        <>
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-500 block" htmlFor="confirm-password">
+                              Confirm Password
+                            </label>
+                            <div className="relative">
+                              <input
+                                id="confirm-password"
+                                type={showConfirmPassword ? 'text' : 'password'}
+                                required
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                className="w-full h-11 px-4 pr-10 text-sm text-primary border border-gray-300 rounded-lg outline-none bg-white focus:border-primary focus:ring-2 focus:ring-primary/10"
+                                placeholder="••••••••"
+                              />
+                              <button
+                                className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-primary transition-colors cursor-pointer"
+                                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                type="button"
+                              >
+                                {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-50 border border-gray-100 rounded-lg p-3 space-y-2">
+                            <div className="flex justify-between items-center text-[10px] font-semibold text-slate-500">
+                              <span>ENTROPY: {strength.entropy} BITS</span>
+                              <span className="font-bold text-primary">{strength.label}</span>
+                            </div>
+                            <div className="w-full h-1 bg-gray-200 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-300 ${strength.color}`}
+                                style={{ width: `${Math.min(100, (strength.entropy / 80) * 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <button
+                        className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                         type="submit"
+                        disabled={isSubmitting}
                       >
-                        {mode === 'login' ? 'Login' : 'Configure MFA Security'}
-                        <ArrowRight className="w-4 h-4" />
+                        {isSubmitting ? 'Processing...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+                        {!isSubmitting && <ArrowRight className="w-4 h-4" />}
                       </button>
-                    </div>
-                  </motion.form>
-                )) : (
-                <motion.div 
-                  key="form2"
+                    </form>
+                  )}
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="otp-step"
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
                   className="space-y-4"
                 >
-                  {/* 6 Digit Inputs container */}
-                  <div className="flex justify-center gap-2 md:gap-3 py-2" onPaste={handlePaste}>
-                    {otpDigits.map((digit, idx) => {
-                      // Let's check if there is an active error to style it with a red border
-                      // Just like the red '!' box in the screenshot!
-                      const isErrorState = error !== '';
-                      // Let's replicate the screenshot's '!' if error occurs on the 4th box (index 3) when it's blank or if any are invalid
-                      const displayValue = isErrorState && idx === 3 && digit === '' ? '!' : digit;
-                      const hasWarningChar = displayValue === '!';
-
-                      return (
-                        <input
-                          key={idx}
-                          id={`otp-input-${idx}`}
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          maxLength={1}
-                          value={displayValue}
-                          onChange={(e) => handleDigitChange(idx, e.target.value)}
-                          onKeyDown={(e) => handleKeyDown(idx, e)}
-                          className={`w-11 h-14 md:w-12 md:h-16 text-center text-xl md:text-2xl font-mono font-bold rounded-xl border border-gray-300 outline-none transition-all bg-white cursor-text select-text
-                            ${hasWarningChar || isErrorState 
-                              ? 'border-red-500 text-red-500 ring-2 ring-red-500/10' 
-                              : 'border-slate-200 text-primary focus:border-primary focus:ring-2 focus:ring-primary/10'
-                            }`}
-                        />
-                      );
-                    })}
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-500 block" htmlFor="otp">
+                      6-Digit OTP Code
+                    </label>
+                    <input
+                      id="otp"
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={otpInput}
+                      onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onKeyDown={handleOtpKeyDown}
+                      className="w-full h-12 px-4 text-center tracking-[0.4em] font-mono text-lg text-primary border border-gray-300 rounded-lg outline-none bg-white focus:border-primary focus:ring-2 focus:ring-primary/10"
+                      placeholder="000000"
+                    />
                   </div>
 
-                  {/* Red error message styled exactly like the screenshot */}
-                  {error && (
-                    <div className="flex items-center justify-center gap-1.5 text-red-500 font-mono text-[11px] md:text-xs py-1">
-                      <span className="w-4 h-4 rounded-full border border-red-500 flex items-center justify-center font-bold text-[10px]">!</span>
-                      <span>Invalid or expired code</span>
-                    </div>
-                  )}
-
-                  {/* Expiration timer countdown clock */}
                   <div className="flex items-center justify-center gap-1.5 text-slate-500 font-mono text-[11px] md:text-xs py-1">
                     <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Code expires in <strong className="font-bold text-primary">{formatCountdown(countdown)}</strong></span>
+                    <span>
+                      Code expires in <strong className="font-bold text-primary">{formatCountdown(countdown)}</strong>
+                    </span>
                   </div>
 
-                  {/* Primary verification blue button */}
-                  <div className="pt-2">
-                    <button 
-                      type="button"
-                      onClick={mode === 'register' ? handleVerifyAndCompleteRegister : handleVerifyLogin}
-                      disabled={otpInput.length !== 6}
-                      className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      Verify Code
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={handleVerifyLogin}
+                    disabled={otpInput.length !== 6 || isSubmitting}
+                    className="w-full h-11 bg-primary hover:bg-[#004395] text-white font-headline font-bold text-sm rounded-lg transition-all shadow-md hover:shadow-lg disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isSubmitting ? 'Verifying...' : 'Verify Code'}
+                  </button>
 
-                  {/* Footer help links in card */}
-                  <div className="text-center pt-4">
+                  <div className="text-center pt-2">
                     <p className="text-xs text-slate-500">
-                      Didn't receive the code?{' '}
-                      <button 
+                      Didn&apos;t receive the code?{' '}
+                      <button
                         type="button"
                         onClick={handleResendOtp}
-                        className="text-slate-400 hover:text-primary font-bold hover:underline cursor-pointer"
+                        className="text-primary hover:underline font-bold cursor-pointer"
                       >
                         Resend OTP
                       </button>
                     </p>
                   </div>
 
-                  {/* Quick Back button for easy step correction */}
                   <div className="text-center pt-1">
                     <button
                       type="button"
-                      onClick={() => setStep(1)}
+                      onClick={() => {
+                        setStep(1);
+                        setOtpInput('');
+                        setPendingUserId(null);
+                        resetMessages();
+                      }}
                       className="text-xs text-slate-400 hover:text-primary transition-colors cursor-pointer underline"
                     >
                       Back to Credentials
@@ -879,13 +652,17 @@ export default function AuthPages({
               )}
             </AnimatePresence>
 
-            {/* Account Switch links */}
-            {step === 1 && mode !== 'forgot-password' && mode !== 'reset-password' && (
+            {step === 1 && mode !== 'forgot-password' && (
               <div className="mt-6 pt-4 border-t border-gray-100 text-center">
                 <p className="text-xs text-slate-500">
-                  {mode === 'login' ? "Don't have an account? " : "Already have an account? "}
-                  <button 
-                    onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+                  {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+                  <button
+                    onClick={() => {
+                      resetMessages();
+                      const nextMode = mode === 'login' ? 'register' : 'login';
+                      setMode(nextMode);
+                      onNavigate(nextMode);
+                    }}
                     className="text-primary font-bold hover:underline cursor-pointer"
                   >
                     {mode === 'login' ? 'Register' : 'Login'}
@@ -894,92 +671,8 @@ export default function AuthPages({
               </div>
             )}
           </motion.section>
-
-          {/* Simulated Mobile Device MFA token display alongside card (Interactive Device Help) */}
-          <AnimatePresence>
-            {(step === 2 || mode === 'register') && (
-              <motion.div 
-                initial={{ opacity: 0, x: 40 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 40 }}
-                transition={{ duration: 0.4 }}
-                className="w-full max-w-[340px] bg-slate-900 text-white rounded-2xl p-5 border border-slate-700 shadow-2xl relative"
-              >
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 w-20 h-4 bg-slate-950 rounded-full"></div>
-                
-                <div className="mt-4">
-                  <div className="flex items-center gap-1.5 text-emerald-400 font-mono text-[9px] uppercase tracking-widest mb-3">
-                    <Cpu className="w-3 h-3 animate-spin" />
-                    INTEGRATED MFA SIMULATOR
-                  </div>
-                  
-                  <h3 className="font-headline text-sm font-semibold text-white mb-1">
-                    SecureAuth Key Code
-                  </h3>
-                  <p className="text-[11px] text-slate-400 leading-normal mb-4">
-                    In a production deployment, this OTP appears on your Google Authenticator or hardware token. Copy the simulator code below to complete the secure verification step.
-                  </p>
-
-                  {/* Simulated screen token */}
-                  <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 text-center">
-                    <div className="flex justify-between items-center mb-1 text-[10px] font-mono text-slate-500">
-                      <span>MFA OTP NODE</span>
-                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                        {timeLeft}s
-                      </span>
-                    </div>
-
-                    <div className="text-2xl font-mono font-bold tracking-widest text-white mb-2">
-                      {currentOtpCode.slice(0, 3)} {currentOtpCode.slice(3)}
-                    </div>
-
-                    <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-emerald-400 transition-all duration-1000 ease-linear origin-left"
-                        style={{ width: `${(timeLeft / 30) * 100}%` }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setOtpInput(currentOtpCode);
-                      addLog('system', 'Copied secure token directly from simulator screen', 'info');
-                    }}
-                    className="w-full mt-3 h-9 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg border border-slate-700 transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-                    Autofill Secure Token
-                  </button>
-
-                  <div className="mt-4 pt-3 border-t border-slate-800 text-[10px] text-slate-500 flex justify-between">
-                    <span>KEY: {mfaSecret.substring(0, 8)}...</span>
-                    <span>AES-256 SYNC</span>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
         </div>
       </main>
-
-      {/* Footer */}
-      <footer className="w-full py-8 bg-white border-t border-gray-200">
-        <div className="flex flex-col md:flex-row justify-between items-center px-6 md:px-16 max-w-7xl mx-auto gap-6">
-          <div className="flex flex-col gap-1 text-center md:text-left">
-            <div className="font-headline text-lg font-bold text-primary">SecureAuth</div>
-            <p className="text-xs text-slate-500">© 2026 SecureAuth. All rights reserved. Precise Security Engineering.</p>
-          </div>
-          <nav className="flex flex-wrap justify-center gap-6">
-            <button className="text-xs text-slate-500 hover:text-primary underline cursor-pointer">Privacy Policy</button>
-            <button className="text-xs text-slate-500 hover:text-primary underline cursor-pointer">Terms of Service</button>
-            <button className="text-xs text-slate-500 hover:text-primary underline cursor-pointer">Security Whitepaper</button>
-            <button className="text-xs text-slate-500 hover:text-primary underline cursor-pointer">Contact</button>
-          </nav>
-        </div>
-      </footer>
-
     </div>
   );
 }
