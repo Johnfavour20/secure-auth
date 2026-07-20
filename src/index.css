@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #002B5B;
+  --color-accent: #2B6CB0;
+  --color-surface-light: #F8FAFF;
+  --color-on-surface: #1A202C;
+  --color-on-surface-variant: #4A5568;
+  --color-outline: #E2E8F0;
+  --color-outline-variant: #EDF2F7;
+
+  /* Dark Operations Portal / Security Dashboard Colors */
+  --color-dark-bg: #0b1326;
+  --color-dark-surface: #131b2e;
+  --color-dark-surface-high: #222a3d;
+  --color-dark-accent: #adc6ff;
+  --color-dark-teal: #04b4a2;
+  --color-dark-border: #334155;
+  --color-dark-alert: #ef4444;
+
+  --font-headline: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* Custom styles for animations and premium micro-interactions */
+@keyframes shieldPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 4px 20px -2px rgba(0, 43, 91, 0.08);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 8px 30px 2px rgba(43, 108, 176, 0.15);
+  }
+}
+
+.shield-pulse {
+  animation: shieldPulse 3s ease-in-out infinite;
+}
+
+/* Scrollbar styling for a tech console look */
+.console-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.console-scroll::-webkit-scrollbar-track {
+  background: #0b1326;
+}
+
+.console-scroll::-webkit-scrollbar-thumb {
+  background: #222a3d;
+  border-radius: 3px;
+}
+
+.console-scroll::-webkit-scrollbar-thumb:hover {
+  background: #adc6ff;
+}
