@@ -17,6 +17,10 @@ export function resendOtp(userId: number) {
   return client.post<AuthResponse>('/resend-otp', { userId });
 }
 
+export function logoutUser() {
+  return client.post<{ message: string }>('/logout', {});
+}
+
 export function fetchCurrentUser() {
   return client.get<User>('/me');
 }

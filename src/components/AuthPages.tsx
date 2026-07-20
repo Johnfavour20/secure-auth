@@ -212,21 +212,14 @@ export default function AuthPages({
         return;
       }
 
-      const authenticatedUser: User = {
-        ...data.user,
-        status: data.user.accountStatus,
-        mfaEnabled: true,
-      };
-
-      setCurrentUser(authenticatedUser);
-      setSessionToken(data.sessionToken ?? null);
-      upsertUser(authenticatedUser);
-      addLog('auth', `Secure session established for ${authenticatedUser.email}.`, 'info');
-      setSuccess('Login successful. Redirecting...');
-
-      window.setTimeout(() => {
-        onNavigate(authenticatedUser.role === 'Admin' ? 'admin' : 'dashboard');
-      }, 700);
+      // Password was correct, but the backend now requires a second factor
+      // before a session is created. Move to the OTP step instead of
+      // logging the user in directly.
+      addLog('auth', `Password verified for ${email.trim().toLowerCase()}. OTP sent.`, 'info');
+      setPendingUserId(data.userId ?? null);
+      setStep(2);
+      setOtpInput('');
+      setSuccess(data.message ?? 'Password verified. Enter the OTP sent to your email to complete login.');
     } catch (requestError) {
       console.error(requestError);
       setError('Unable to reach the Flask API. Make sure the backend is running on port 5000.');

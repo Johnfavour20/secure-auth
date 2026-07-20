@@ -8,6 +8,8 @@ import {
   MoreVertical, Filter, Ban
 } from 'lucide-react';
 import { User, LogEntry } from '../types';
+import useAuthStore from '../store/useAuthStore';
+import { logoutUser } from '../api/auth';
 
 const API_BASE_URL = 'http://localhost:5000/api';
 
@@ -56,6 +58,15 @@ export default function AdminDashboard({
   refreshLogs,
   addLog
 }: AdminDashboardProps) {
+  // The real session token issued at login/OTP-verify — needed on every
+  // admin request now that the backend actually checks it.
+  const sessionToken = useAuthStore((state) => state.sessionToken);
+
+  const authHeaders = (extra: Record<string, string> = {}) => ({
+    ...extra,
+    Authorization: `Bearer ${sessionToken ?? ''}`,
+  });
+
   // Navigation tabs state
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'logs' | 'settings' | 'support'>('overview');
   
@@ -355,7 +366,7 @@ export default function AdminDashboard({
     await runAdminRequest(async () => {
       const response = await fetch(`${API_BASE_URL}/admin/users`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({
           email: newEmail,
@@ -391,7 +402,7 @@ export default function AdminDashboard({
     await runAdminRequest(async () => {
       const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({ mfaEnabled: nextState }),
       });
@@ -413,7 +424,7 @@ export default function AdminDashboard({
     await runAdminRequest(async () => {
       const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({ accountStatus: nextStatus }),
       });
@@ -433,7 +444,7 @@ export default function AdminDashboard({
     await runAdminRequest(async () => {
       const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({ role }),
       });
@@ -454,6 +465,7 @@ export default function AdminDashboard({
     await runAdminRequest(async () => {
       const response = await fetch(`${API_BASE_URL}/admin/users/${user.userId}`, {
         method: 'DELETE',
+        headers: authHeaders(),
         credentials: 'include',
       });
 
@@ -560,9 +572,11 @@ export default function AdminDashboard({
     addLog('system', `Administrator Alex Johnson exported ${filteredUsers.length} user directory records.`, 'info');
   };
 
-  // Return to landing page as logout
+  // Close the session server-side, then return to landing page
   const handleLogout = () => {
-    addLog('auth', `Administrator Alex Johnson session closed. Admin console detached.`, 'info');
+    void logoutUser().catch((requestError) => console.error('Logout request failed:', requestError));
+
+    addLog('auth', `Administrator session closed. Admin console detached.`, 'info');
     setCurrentUser(null);
     setSessionToken?.(null);
     onNavigate('landing');
@@ -1518,6 +1532,7 @@ export default function AdminDashboard({
                         void runAdminRequest(async () => {
                           const response = await fetch(`${API_BASE_URL}/admin/logs`, {
                             method: 'DELETE',
+                            headers: authHeaders(),
                             credentials: 'include',
                           });
                           const data = await response.json();

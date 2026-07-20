@@ -4,6 +4,7 @@ import {
   ShieldCheck, LogOut, CheckCircle2, Clock, Shield
 } from 'lucide-react';
 import { User, LogEntry } from '../types';
+import { logoutUser } from '../api/auth';
 
 interface SecurityPortalProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;
@@ -22,7 +23,6 @@ export default function SecurityPortal({
   setSessionToken,
   addLog
 }: SecurityPortalProps) {
-  
   const userEmail = currentUser?.email || 'user@example.secure';
   const displayName = currentUser?.fullName || (userEmail === 'user@example.secure' ? 'Alex Johnson' : userEmail.split('@')[0]);
 
@@ -50,6 +50,8 @@ export default function SecurityPortal({
   };
 
   const handleLogout = () => {
+    void logoutUser().catch((requestError) => console.error('Logout request failed:', requestError));
+
     addLog('auth', `User ${userEmail} signed out. Session closed securely.`, 'info');
     setCurrentUser(null);
     setSessionToken?.(null);

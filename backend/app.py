@@ -4,12 +4,16 @@ from flask_mail import Mail, Message
 from dotenv import load_dotenv
 from email.message import EmailMessage
 from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 import os
 import smtplib
 import sqlite3
 import random
 import string
 from datetime import datetime, timedelta
+
+# How long a session stays valid without the user logging in again.
+SESSION_LIFETIME = timedelta(hours=8)
 
 # Load environment variables from workspace root
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -294,6 +298,76 @@ def generate_otp(length=6):
 def json_body():
     return request.get_json(silent=True) or {}
 
+
+# ---------------------------------------------------------------------------
+# Session verification
+#
+# Every request to a protected route must include the session token that was
+# issued at login, sent as:  Authorization: Bearer <session_token>
+#
+# get_current_session() looks that token up in User_Sessions and returns the
+# matching user row only if the session is Active and not expired. Nothing
+# downstream should trust request data alone to decide who a user is or what
+# role they have — it must come from this lookup.
+# ---------------------------------------------------------------------------
+def get_current_session():
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return None, None
+
+    token = auth_header.split(' ', 1)[1].strip()
+    if not token:
+        return None, None
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.session_id, s.session_token, s.login_time, s.session_status, u.*
+        FROM User_Sessions s
+        JOIN Users u ON u.user_id = s.user_id
+        WHERE s.session_token = ?
+    ''', (token,))
+    row = cursor.fetchone()
+
+    if not row or row['session_status'] != 'Active':
+        conn.close()
+        return None, None
+
+    login_time = parse_db_datetime(row['login_time'])
+    if datetime.now() - login_time > SESSION_LIFETIME:
+        cursor.execute('''
+            UPDATE User_Sessions SET session_status = 'Expired' WHERE session_id = ?
+        ''', (row['session_id'],))
+        conn.commit()
+        conn.close()
+        return None, None
+
+    conn.close()
+    return row, token
+
+
+def require_auth(view_func):
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        user, token = get_current_session()
+        if not user:
+            return jsonify({"error": "Authentication required. Please log in again."}), 401
+        request.current_user = user
+        request.current_session_token = token
+        return view_func(*args, **kwargs)
+    return wrapped
+
+
+def require_admin(view_func):
+    @wraps(view_func)
+    @require_auth
+    def wrapped(*args, **kwargs):
+        if request.current_user['role'] != 'Admin':
+            log_activity(request.current_user['user_id'], "Unauthorized Admin Access Attempt", request.remote_addr, "Failed")
+            return jsonify({"error": "Administrator access required."}), 403
+        return view_func(*args, **kwargs)
+    return wrapped
+
 # Initialize database when app starts
 with app.app_context():
     init_db()
@@ -369,7 +443,7 @@ If you did not create this account, please contact support.
         conn.close()
         return jsonify({"error": str(e)}), 500
 
-# Login endpoint (step 1: password verification
+# Login endpoint (step 1: password verification -> triggers OTP, does NOT create a session)
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
@@ -391,26 +465,43 @@ def login():
         conn.close()
         return jsonify({"error": "Account is inactive"}), 403
 
-    session_token = ''.join(random.choices(string.ascii_letters + string.digits, k=64))
+    # Password is correct, but this is only factor one. Invalidate any old
+    # pending OTPs, generate a fresh one, and require it before a session
+    # is created — this is what makes login itself MFA, not just registration.
     cursor.execute('''
-        INSERT INTO User_Sessions (user_id, session_token)
-        VALUES (?, ?)
-    ''', (user['user_id'], session_token))
+        UPDATE OTP_Verification SET verification_status = 'Expired'
+        WHERE user_id = ? AND verification_status = 'Pending'
+    ''', (user['user_id'],))
+
+    otp_code = generate_otp()
+    expires_at = datetime.now() + timedelta(minutes=5)
+    cursor.execute('''
+        INSERT INTO OTP_Verification (user_id, otp_code, expires_at)
+        VALUES (?, ?, ?)
+    ''', (user['user_id'], otp_code, expires_at))
     conn.commit()
 
-    log_activity(user['user_id'], "Login Successful", request.remote_addr)
+    email_body = f"""
+Hi {user['full_name']},
+
+Someone (hopefully you) just signed in to SecureAuth with your password.
+
+Use this code to complete login: {otp_code}
+
+This code will expire in 5 minutes. If this wasn't you, change your password immediately.
+"""
+    email_sent = send_email('Your SecureAuth Login Code', [email], email_body)
+    if not email_sent:
+        conn.close()
+        return jsonify({"error": "Unable to send the login OTP email. Please verify your mail configuration."}), 502
+
+    log_activity(user['user_id'], "Password Verified, OTP Sent", request.remote_addr)
     conn.close()
 
     return jsonify({
-        "message": "Login successful!",
-        "sessionToken": session_token,
-        "user": {
-            "userId": user['user_id'],
-            "fullName": user['full_name'],
-            "email": user['email'],
-            "role": user['role'],
-            "accountStatus": user['account_status']
-        }
+        "message": "Password verified. Enter the OTP sent to your email to complete login.",
+        "userId": user['user_id'],
+        "requiresOtp": True
     }), 200
 
 # Verify OTP endpoint (step 2)
@@ -552,7 +643,25 @@ def resend_otp():
     return jsonify(response_payload), 200
 
 
+@app.route('/api/logout', methods=['POST'])
+@require_auth
+def logout():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE User_Sessions
+        SET session_status = 'Closed', logout_time = CURRENT_TIMESTAMP
+        WHERE session_token = ?
+    ''', (request.current_session_token,))
+    conn.commit()
+    conn.close()
+
+    log_activity(request.current_user['user_id'], "Logout", request.remote_addr)
+    return jsonify({"message": "Logged out successfully."}), 200
+
+
 @app.route('/api/admin/users', methods=['GET'])
+@require_admin
 def get_admin_users():
     conn = get_db()
     cursor = conn.cursor()
@@ -567,6 +676,7 @@ def get_admin_users():
 
 
 @app.route('/api/admin/users', methods=['POST'])
+@require_admin
 def create_admin_user():
     data = json_body()
     full_name = (data.get('fullName') or '').strip()
@@ -606,6 +716,7 @@ def create_admin_user():
 
 
 @app.route('/api/admin/users/<int:user_id>', methods=['PATCH'])
+@require_admin
 def update_admin_user(user_id):
     data = json_body()
     allowed_fields = {
@@ -654,6 +765,7 @@ def update_admin_user(user_id):
 
 
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+@require_admin
 def delete_admin_user(user_id):
     conn = get_db()
     cursor = conn.cursor()
@@ -675,6 +787,7 @@ def delete_admin_user(user_id):
 
 
 @app.route('/api/admin/logs', methods=['GET'])
+@require_admin
 def get_admin_logs():
     conn = get_db()
     cursor = conn.cursor()
@@ -691,6 +804,7 @@ def get_admin_logs():
 
 
 @app.route('/api/admin/logs', methods=['DELETE'])
+@require_admin
 def clear_admin_logs():
     conn = get_db()
     cursor = conn.cursor()
