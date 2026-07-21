@@ -3,6 +3,9 @@ export function getApiBaseUrl(): string {
   if (!envUrl) {
     return '/api';
   }
+  // Auto-correct outdated/typo Render URLs
+  envUrl = envUrl.replace(/secure-auth-[12]\.onrender\.com/g, 'secure-auth-3.onrender.com');
+
   // Remove trailing slashes
   envUrl = envUrl.replace(/\/+$/, '');
   
