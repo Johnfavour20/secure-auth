@@ -9,9 +9,9 @@ import {
 } from 'lucide-react';
 import { User, LogEntry } from '../types';
 import useAuthStore from '../store/useAuthStore';
-import { logoutUser } from '../api/auth';
+import { getApiBaseUrl } from '../utils/apiConfig';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const API_BASE_URL = getApiBaseUrl();
 
 interface AdminDashboardProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;

@@ -16,9 +16,9 @@ import {
   Lock,
 } from 'lucide-react';
 import { User } from '../types';
-import { forgotPassword } from '../api/auth';
+import { getApiBaseUrl } from '../utils/apiConfig';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const API_BASE_URL = getApiBaseUrl();
 
 interface AuthPagesProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;
