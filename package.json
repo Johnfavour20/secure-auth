@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "build": "vite build && pip install -r backend/requirements.txt",
+    "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
@@ -16,6 +17,7 @@
     "axios": "^1.18.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "http-proxy-middleware": "^2.0.6",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
