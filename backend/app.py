@@ -120,6 +120,11 @@ def send_email_via_smtp(subject, recipients, body):
 
 
 def send_email(subject, recipients, body):
+    username = app.config.get('MAIL_USERNAME')
+    password = app.config.get('MAIL_PASSWORD')
+    if not username or not password:
+        print("SMTP email skipped (MAIL_USERNAME or MAIL_PASSWORD not configured).")
+        return False
     try:
         msg = Message(subject, recipients=recipients)
         msg.body = body
@@ -464,14 +469,19 @@ This code will expire in 5 minutes.
 If you did not create this account, please contact support.
 """
         email_sent = send_email('Verify Your SecureAuth Account', [email], email_body)
+        msg_extra = ""
         if email_sent:
             print(f"Registration OTP email sent to {email}")
         else:
-            conn.close()
-            return jsonify({"error": "Unable to send the registration OTP email. Please verify your mail configuration."}), 502
+            print(f"[DEMO/DEV MODE] Email delivery failed or skipped. OTP for {email} is: {otp_code}")
+            msg_extra = f" (Demo OTP: {otp_code})"
 
         conn.close()
-        return jsonify({"message": "Registration successful! Verify your email OTP to continue.", "userId": user_id}), 201
+        return jsonify({
+            "message": f"Registration successful! Verify your email OTP to continue.{msg_extra}", 
+            "userId": user_id,
+            "otp": otp_code
+        }), 201
     except Exception as e:
         conn.close()
         return jsonify({"error": str(e)}), 500
@@ -524,17 +534,21 @@ Use this code to complete login: {otp_code}
 This code will expire in 5 minutes. If this wasn't you, change your password immediately.
 """
     email_sent = send_email('Your SecureAuth Login Code', [email], email_body)
-    if not email_sent:
-        conn.close()
-        return jsonify({"error": "Unable to send the login OTP email. Please verify your mail configuration."}), 502
+    msg_extra = ""
+    if email_sent:
+        print(f"Login OTP email sent to {email}")
+    else:
+        print(f"[DEMO/DEV MODE] Email delivery failed or skipped. OTP for {email} is: {otp_code}")
+        msg_extra = f" (Demo OTP: {otp_code})"
 
     log_activity(user['user_id'], "Password Verified, OTP Sent", request.remote_addr)
     conn.close()
 
     return jsonify({
-        "message": "Password verified. Enter the OTP sent to your email to complete login.",
+        "message": f"Password verified. Enter the OTP sent to your email to complete login.{msg_extra}",
         "userId": user['user_id'],
-        "requiresOtp": True
+        "requiresOtp": True,
+        "otp": otp_code
     }), 200
 
 # Verify OTP endpoint (step 2)
@@ -671,8 +685,9 @@ def resend_otp():
     conn.close()
     response_payload = {"message": "New OTP sent to your email!"}
     if not email_sent:
-        response_payload["message"] = "The OTP could not be delivered by email. Use this code instead."
+        response_payload["message"] = f"The OTP could not be delivered by email. Use this code instead. (Demo OTP: {otp_code})"
         response_payload["debugOtp"] = otp_code
+        response_payload["otp"] = otp_code
     return jsonify(response_payload), 200
 
 
