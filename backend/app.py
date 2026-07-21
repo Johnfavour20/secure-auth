@@ -28,8 +28,35 @@ app.secret_key = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-product
 DEFAULT_ADMIN_EMAIL = os.getenv('DEFAULT_ADMIN_EMAIL', 'admin@secureauth.io')
 DEFAULT_ADMIN_PASSWORD = os.getenv('DEFAULT_ADMIN_PASSWORD', 'Admin@123')
 
-configured_origins = [origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://localhost:8080,https://secure-auth-3.onrender.com,https://secure-auth-2.onrender.com,https://secure-auth-umber.vercel.app').split(',') if origin.strip()]
-CORS(app, supports_credentials=True, origins=configured_origins)
+cors_origins_env = os.getenv('CORS_ORIGINS', '')
+custom_origins = [o.strip().rstrip('/') for o in cors_origins_env.split(',') if o.strip()]
+
+default_origins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:8080',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+    'https://secure-auth-3.onrender.com',
+    'https://secure-auth-2.onrender.com',
+    'https://secure-auth-umber.vercel.app',
+]
+
+all_origins = list(set(default_origins + custom_origins))
+origins_spec = all_origins + [r"https://.*\.vercel\.app"]
+
+CORS(app, supports_credentials=True, origins=origins_spec, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin:
+        if origin.endswith('.vercel.app') or origin in all_origins or 'localhost' in origin or '127.0.0.1' in origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    return response
 
 # Configure Flask-Mail
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
