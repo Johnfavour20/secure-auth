@@ -28,8 +28,7 @@ app.secret_key = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-product
 DEFAULT_ADMIN_EMAIL = os.getenv('DEFAULT_ADMIN_EMAIL', 'admin@secureauth.io')
 DEFAULT_ADMIN_PASSWORD = os.getenv('DEFAULT_ADMIN_PASSWORD', 'Admin@123')
 
-# Configure CORS to allow requests from the local frontend and the deployed Railway/Render hosts.
-configured_origins = [origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://localhost:8080,https://secure-auth-production-dbba.up.railway.app,https://secure-auth-1.onrender.com').split(',') if origin.strip()]
+configured_origins = [origin.strip() for origin in os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://localhost:8080,https://secure-auth-3.onrender.com,https://secure-auth-2.onrender.com,https://secure-auth-umber.vercel.app').split(',') if origin.strip()]
 CORS(app, supports_credentials=True, origins=configured_origins)
 
 # Configure Flask-Mail

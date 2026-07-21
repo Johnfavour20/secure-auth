@@ -11,7 +11,7 @@ import { User, LogEntry } from '../types';
 import useAuthStore from '../store/useAuthStore';
 import { logoutUser } from '../api/auth';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://secure-auth-1.onrender.com/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 interface AdminDashboardProps {
   onNavigate: (view: 'landing' | 'login' | 'register' | 'dashboard' | 'admin') => void;
