@@ -373,10 +373,16 @@ def require_admin(view_func):
 with app.app_context():
     init_db()
 
-# Test route
+# Health check & root route
+@app.route('/', methods=['GET'])
+@app.route('/health', methods=['GET'])
 @app.route('/api/test', methods=['GET'])
 def test():
-    return jsonify({"message": "SecureAuth Flask API is running!"})
+    return jsonify({
+        "status": "online",
+        "service": "SecureAuth API",
+        "message": "SecureAuth Flask API is running successfully!"
+    }), 200
 
 # Register endpoint
 @app.route('/api/register', methods=['POST'])
