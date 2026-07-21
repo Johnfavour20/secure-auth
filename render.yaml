@@ -12,4 +12,4 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: "http://localhost:3000,http://localhost:5173,https://secure-auth-1.onrender.com"
+        value: "http://localhost:3000,http://localhost:5173,https://secure-auth-3.onrender.com,https://secure-auth-umber.vercel.app"
