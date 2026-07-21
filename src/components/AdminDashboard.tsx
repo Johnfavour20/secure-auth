@@ -558,7 +558,7 @@ export default function AdminDashboard({
     
     const csvContent = [
       headers.join(','),
-      ...rows.map(r => r.map(val => `"${val.replace(/"/g, '""')}"`).join(','))
+      ...rows.map((r) => r.map((val) => `"${String(val ?? '').replace(/"/g, '""')}"`).join(','))
     ].join('\n');
 
     const dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
