@@ -1,7 +1,7 @@
 import axios from 'axios';
 import useAuthStore from '../store/useAuthStore';
 
-const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'https://secure-auth-1.onrender.com/api';
+const baseURL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const client = axios.create({
   baseURL,
