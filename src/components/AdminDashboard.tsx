@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { User, LogEntry } from '../types';
 import useAuthStore from '../store/useAuthStore';
+import { logoutUser } from '../api/auth';
 import { getApiBaseUrl } from '../utils/apiConfig';
 
 const API_BASE_URL = getApiBaseUrl();

@@ -16,6 +16,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { User } from '../types';
+import { forgotPassword } from '../api/auth';
 import { getApiBaseUrl } from '../utils/apiConfig';
 
 const API_BASE_URL = getApiBaseUrl();
